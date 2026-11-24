@@ -35,11 +35,6 @@ runtime objects, which `tools/builder/make_builder.py` puts together; no code of
 image, about 4 minutes once. By hand:
 
 
-The player's launcher builds it with `tools/builder/build_native.py` (Python, the lifter, the compiler and the prebuilt
-runtime objects, which `tools/builder/make_builder.py` puts together; no code of the game), from the player's own disc
-image, about 4 minutes once. By hand:
-
-
 Put your disc's `Default.xbe` in `private/disc/` (the retail one is taken with extract-xiso's media patch, see
 `docs/bring-up.md`), then:
 
