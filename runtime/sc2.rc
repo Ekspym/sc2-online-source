@@ -1,0 +1,3 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SC2 Online: the program icon (own drawing); SDL takes it for the window (SDL_WINDOWS_INTRESOURCE_ICON). */
+1 ICON "app.ico"

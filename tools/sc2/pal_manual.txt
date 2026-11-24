@@ -1,0 +1,61 @@
+# Hand-settled US -> PAL addresses for tools/sc2/pal_port.py: "US PAL" or "US keep" (not an address).
+# Each says how it was settled. Shape-only (fuzzy) function matches are taken only when their callers agree:
+# the matched callers' call instructions name the PAL function (private/program-pal/callers.py while porting).
+
+# --- not addresses: constants that fall in the image's range
+0x000343fd keep   # rand's LCG multiplier (sc2_hooks.c)
+0x00269ec3 keep   # rand's LCG increment
+0x003bf0f8 0x003d10f8   # an offset added to the pool pointer (sc2_wm_select.c pool()): 0xF2470 in US, 0xF68D0 in PAL
+0x00382010 keep   # DirectSound buffer-description flags mask (dsound_buffer_adapter.c)
+
+# --- code: shape-only matches, confirmed by callers or by identical shape at the same distance
+0x00044360 0x000451a0   # weapon bones setter: 1 caller agrees; differs only by fighter-record offsets (+0x20)
+0x00047a0e 0x0004884e   # return address after the fighter setup's call to 0x44360 (PAL call at 0x48849)
+0x0004fef0 0x00050f10   # first logo scene's update: the next one (0x50190) is an exact match at 0x511c0
+0x000d24f0 0x000d5cc0   # 3 callers agree
+0x000d29a0 0x000d6180   # identical shape (ratio 1.0), 0x37e0 after it as 0xd24f0 is
+0x000d2980 0x000d6160   # the jmp to 0xd29a0 just before it (PAL: jmp 0xd6180 at 0xd6160)
+0x000f1310 0x000f5770   # 3 callers agree, identical shape
+0x000f1c70 0x000f60d0   # 3 callers agree (the shape pass picked its twin 0xf60a0)
+0x000f26e0 0x000f6b40   # 4 callers agree
+0x000f2890 0x000f6cf0   # 1 caller agrees, identical shape
+0x000f28e0 0x000f6d90   # 1 caller agrees, identical shape
+0x000fa030 0x000fe700   # 2 callers agree; the Weapon Master grid builder grew 19 instructions in PAL
+0x000fa430 0x000feb40   # 2 callers agree
+0x001068c7 0x0010baa7   # the media check's jge (same code; the PAL copy is media-patched too)
+0x0010a330 0x0010f530   # 1 caller agrees (the shape pass picked 0x146c0)
+
+# --- data no instruction names: by their bytes (64 of 64 alike) or by the pointer that holds them
+0x00177950 0x0017cbc0   # Spawn's strings, 0x177950-0x17798b: all 0x5270 later, bytes alike
+0x0017d388 0x00181e68   # weapon parts by character (sc2_guest.cpp, kWeaponParts): the same 34 rows, each pointing at the same records, 0x4ae0 later
+0x00177954 0x0017cbc4
+0x00177968 0x0017cbd8
+0x00177970 0x0017cbe0
+0x00177978 0x0017cbe8
+0x0017797c 0x0017cbec
+0x00177984 0x0017cbf4
+0x0017798b 0x0017cbfb
+0x0017a7c8 0x0017f538   # each character's cell: 1 reference and 63/64 bytes alike
+0x00188dc4 0x0018d690   # Weapon Master cell offsets: 2 references
+0x00188f20 0x0018d7cc   # 1 reference each; bytes alike
+0x00188f24 0x0018d7d0
+0x00188f28 0x0018d7d4
+0x00188f44 0x0018d7f0
+0x001967a0 0x0019afe0   # fight camera component (0x195fb0 + 0x7f0, which moved 0x4840; bytes alike)
+0x001967b0 0x0019aff0
+0x001968a0 0x0019b0e0
+0x0034ed88 0x003608f8   # Arcade endings table: 1 reference, 64/64 bytes alike
+0x003cb418 0x003dd0a8   # frame count: +8 into the object at 0x3cb410, whose pointer table entry is at PAL 0x225b58 (0x3dd0a0)
+
+# --- issue #77 (the guests' weapons as items, the weapon gallery's rows, Weapon Master's wider select box)
+0x000698d0 0x0006ae40   # bonus characters' availability: 0.94 shape match, 0x40 after 0x69890 -> 0x6ae00 as in the US program
+0x000faf6c 0x000ffddc   # the shop step's return from 0xF5D20 (PAL 0xFA200: its two callers are the step and the help line)
+0x000f7a80 0x000fc0e5   # the help line's return from 0xF5D20
+0x000f7bac 0x000fc211   # the help line's return from 0x56740 (PAL 0x57CD0; the one call inside the help line's function)
+0x000fb001 0x000ffe71   # the shop step's two returns from 0xF3940 (PAL 0xF7E20: its only two callers)
+0x000fb025 0x000ffe95
+0x000fb06f 0x000ffedf   # the shop step's return from 0x57680 (PAL 0x58C10; the one call in the step)
+0x000fb088 0x000ffef8   # the shop step's return from 0x580A0 (PAL 0x59640: its only caller outside 0x59xxx)
+0x000fa408 0x000feb09   # the select build's return from 0xB81B0 (PAL 0xBB3D0; the one call inside PAL 0xFE700's function)
+0x0034eed0 0x00360a30   # the weapon gallery's table: PAL 0xE3100 (US 0xDF110) copies 19 rows from it, to 0x360AC8
+0x00373f58 0x00385b9c   # the vblank count (sc2_hooks.c frame_begins): written by the vblank callback alone, 0x2DA40 in US, 0x2E320 in PAL
