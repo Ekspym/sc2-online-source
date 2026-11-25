@@ -475,6 +475,45 @@ static void autoDirect()
     std::fprintf(stderr, "online: the fight asked for straight from the parking (frame %llu)\n", (unsigned long long)sc2_net_reads);
 }
 
+/* Team battle (the launcher's start line mode=team, --net-team): at the meeting both sides put back the mode select the
+   practice walk starts from (snapMenu, Original's list open, the cursor on Arcade; the host's pages then make the two
+   alike) and the hidden way goes to VS Team Battle, five down (the practice's six); once its select is current the
+   controls are the players' own (lockstep outside the fight, rollback in it, as ever): they choose the team, fighters
+   and order there, and the game the stage. */
+static bool netTeam, teamMenuSeen, teamHanded;
+static std::uint64_t teamSelectAt; // (tests: the frame its select was entered, the mash counted from it)
+static sc2::SaveState teamSelectStart; // (its select as the players got it: a rematch goes back there, the wins kept)
+
+/* (the team's size, chosen in the lobby (team=N): set by the hidden way on the select's first screen, the same for both
+   players: left kTeamSizeSteps times (down to the game's least, kGameTeamMin), right up to N, A; then teamSizeSet and the
+   controls are the players' for the fighters) */
+static int netTeamSize = 3;
+static bool teamSizeSet;
+constexpr unsigned kGameTeamMin = 1u, kTeamSizeSteps = 10u, kTeamSizeFrom = 60u;
+static unsigned teamSizeAt(unsigned step) { return kTeamSizeFrom + 10u * step; }
+
+static void teamWalk(std::uint32_t current)
+{
+    const auto pulse = [](unsigned at, unsigned now) { return now >= at && now < at + 4u; };
+    if (current == 10u && teamMenuSeen && !teamSizeSet) {
+        const unsigned rights = static_cast<unsigned>(std::max(netTeamSize, int(kGameTeamMin))) - kGameTeamMin;
+        for (auto &pad : netAutoPads) {
+            for (unsigned i = 0; i < kTeamSizeSteps; ++i)
+                if (pulse(teamSizeAt(i), autoFrames)) pad.buttons |= 0x4u;
+            for (unsigned i = 0; i < rights; ++i)
+                if (pulse(teamSizeAt(kTeamSizeSteps + i), autoFrames)) pad.buttons |= 0x8u;
+            if (pulse(teamSizeAt(kTeamSizeSteps + rights + 1u), autoFrames)) pad.analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
+        }
+        if (autoFrames >= teamSizeAt(kTeamSizeSteps + rights + 4u)) teamSizeSet = true;
+        return;
+    }
+    if (current != 6u) return;
+    teamMenuSeen = true;
+    for (unsigned i = 0; i < 5u; ++i)
+        if (pulse(140u + 20u * i, autoFrames)) netAutoPads[0].buttons |= 0x2u;
+    if (pulse(260u, autoFrames)) netAutoPads[0].analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
+}
+
 static void autoPads()
 {
     netAutoPads[0] = netAutoPads[1] = RecompInputGamepad{};
@@ -482,6 +521,12 @@ static void autoPads()
     if (current != autoScene) {
         autoScene = current;
         autoFrames = 0;
+    }
+    if (netTeam && !practice && sc2_net_live) {
+        // (after the meeting only: the way from the title to the parking is the same as ever)
+        teamWalk(current);
+        ++autoFrames;
+        return;
     }
     const auto pulse = [](unsigned at, unsigned now) { return now >= at && now < at + 6u; };
     if (!autoRematch) {
@@ -734,6 +779,8 @@ static bool launcherPoll()
         const int own = number(player == 1 ? "char1" : "char2", 4);
         s.pick = std::to_string(own / 4) + ":" + std::to_string(own % 4);
         s.stage = number("stage", -1);
+        netTeam = v["mode"] == "team"; // (team battle: chosen in the game, teamWalk)
+        netTeamSize = std::clamp(number("team", 3), 1, 8);
         std::string name;
         const std::string hex = v[player == 1 ? "name1" : "name2"];
         for (std::size_t i = 0; i + 1 < hex.size(); i += 2)
@@ -892,6 +939,68 @@ static void beginAuto()
         std::fprintf(stderr, "online: the fight chosen: %s vs %s, stage %d\n", netplay->Pick(0).c_str(),
                      netplay->Pick(1).c_str(), netplay->Stage());
     }
+    teamMenuSeen = teamHanded = teamSizeSet = false;
+    if (netAuto && netTeam) {
+        // (team battle: nothing chosen in the launcher is put in; the players choose in the game)
+        sc2_net_pick[0] = sc2_net_pick[1] = -1;
+        netAutoOutfit[0] = netAutoOutfit[1] = -1;
+        netAutoStage = -1;
+        std::fprintf(stderr, "online: team battle: on to VS Team Battle's select\n");
+    }
+}
+
+// (team battle: VS Team Battle's select current, the controls the players' from this frame on, the same frame on both sides)
+static void teamHandOver(std::uint64_t frame)
+{
+    if (!netTeam || !netAuto || !teamMenuSeen || teamHanded) return;
+    const std::uint32_t current = *recomp_memory_u32(0x398700u);
+    if (current == 6u || *recomp_memory_u32(0x398704u) != 0xFFFFFFFFu || !teamSizeSet) return;
+    teamHanded = true;
+    netAuto = false;
+    recomp_kernel_drain_others();
+    sc2::SaveFrame(teamSelectStart);
+    teamSelectAt = frame;
+    netStartWins = winsCounted();
+    launcherFight();
+    recomp_audio_output_set_muted(netAutoMuted ? 1 : 0);
+    std::fprintf(stderr, "online: team battle: at its select (scene %u, frame %llu, team of %d), the controls are the players'\n", current,
+                 (unsigned long long)frame, netTeamSize);
+}
+
+// (diagnosis while team battle's end is measured: each scene and each change of the wins, with the fighters' records)
+static void teamTrace(std::uint64_t frame)
+{
+    static std::uint32_t scene = ~0u, wins = ~0u;
+    if (!netTeam || !teamHanded) {
+        scene = wins = ~0u;
+        return;
+    }
+    const std::uint32_t now = *recomp_memory_u32(0x398700u), counted = winsCounted();
+    // (the rounds won of each fighter's record, +0x154C, and its character, +0x58: what a member's KO and the next one change)
+    const auto field = [](std::uint32_t p, std::uint32_t at) {
+        return *recomp_memory_u32(SC2_FIGHTER_RECORD + p * SC2_FIGHTER_STRIDE + SC2_FIGHTER_FIELD(at));
+    };
+    static std::uint32_t rounds[2] = {~0u, ~0u}, chars[2] = {~0u, ~0u};
+    bool changed = now != scene || counted != wins;
+    for (std::uint32_t p = 0; p < 2u; ++p) {
+        const std::uint32_t r = field(p, 0x154Cu), c = field(p, 0x58u) & 0xffffu;
+        if (r != rounds[p] || c != chars[p]) {
+            changed = true;
+            std::fprintf(stderr, "team trace: frame %llu player %u rounds won %u (to win %u) character %u%c", (unsigned long long)frame,
+                         p + 1u, r, field(p, 0x1550u), c, 10);
+        }
+        rounds[p] = r;
+        chars[p] = c;
+    }
+    if (!changed) return;
+    scene = now;
+    wins = counted;
+    const auto character = [](std::uint32_t p) {
+        return *reinterpret_cast<const std::int16_t *>(recomp_memory(SC2_FIGHTER_RECORD + p * SC2_FIGHTER_STRIDE + SC2_FIGHTER_FIELD(0x58u), 2u));
+    };
+    std::fprintf(stderr, "team trace: frame %llu scene %u next %x wins %u %u draws %u; chars %d %d; stage %u%c",
+                 (unsigned long long)frame, now, *recomp_memory_u32(0x398704u), winsAt(0x39DE58u), winsAt(0x3AECB8u),
+                 winsAt(0x39DE5Au), character(0u), character(1u), *recomp_memory_u32(0x398770u), 10);
 }
 
 /* What the screen says of the match: the code to give while hosting, then the ping */
@@ -1300,11 +1409,20 @@ static RecompInputGamepad netMine(std::uint64_t frame, bool over)
         // (tests: past the title, A every 40 frames in the boot's questions and the character select)
         static bool titleSeen;
         const std::uint32_t at = *recomp_memory_u32(0x398700u);
-        titleSeen |= at == 5u;
+        titleSeen |= at == 5u || teamHanded; // (team battle: its select after the meeting)
         // (the boot's "no save data, create it?": cursor to Yes first (up and left), then A)
         if (at == 34u && frame % 40u < 4u) mine.buttons |= 0x1u | 0x4u;
         if (at == 34u && frame % 40u >= 20u && frame % 40u < 24u) mine.analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
-        if (titleSeen && at == 10u && frame % 40u < 4u) mine.analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
+        // (team battle: counted from its select's start, so a rematch's select gets the same presses as the first)
+        const std::uint64_t t = teamHanded && frame >= teamSelectAt ? frame - teamSelectAt : frame;
+        if (titleSeen && at == 10u && !teamHanded && t % 40u < 4u) mine.analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
+        if (teamHanded && at == 10u) {
+            // (team battle: the cursor goes back to its first fighter after each pick, and a fighter is taken at most twice:
+            // in the Nth window of 160 frames N steps to the right, then A, so every pick is another fighter)
+            const std::uint64_t n = t / 160u, in = t % 160u;
+            if (in < 8u * n && in % 8u < 3u) mine.buttons |= 0x8u;
+            if (in >= 150u && in < 154u) mine.analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
+        }
     }
     if (static const char *mash = std::getenv("SC2_TEST_MASH"); mash && !over && *recomp_memory_u32(0x398700u) == kFightScene) {
         // (tests: in a fight, controls that change every few frames, from a seed: rollbacks to measure)
@@ -1353,7 +1471,20 @@ static void netWork(std::uint64_t frame, bool live, bool over)
             if (netWantsRematch[0] && netWantsRematch[1]) {
                 std::fprintf(stderr, "online: rematch (frame %llu)\n", (unsigned long long)frame);
                 static const bool reload = std::getenv("SC2_REMATCH_RELOAD") != nullptr; // (the way through the select)
-                if (netFightStart.valid && !reload) {
+                if (netTeam && teamSelectStart.valid) {
+                    // (team battle: back to its select, the teams chosen again)
+                    std::uint16_t wins[3];
+                    const std::uint32_t at[3] = {0x39DE58u, 0x3AECB8u, 0x39DE5Au};
+                    for (int i = 0; i < 3; ++i) std::memcpy(&wins[i], recomp_memory(at[i], 2u), 2u);
+                    sc2::LoadFrame(teamSelectStart);
+                    for (int i = 0; i < 3; ++i) std::memcpy(recomp_memory(at[i], 2u), &wins[i], 2u);
+                    netStartWins = winsCounted();
+                    netOverAt = 0;
+                    netWantsRematch[0] = netWantsRematch[1] = false;
+                    launcherFight();
+                    teamSelectAt = frame;
+                    std::fprintf(stderr, "online: team battle: at its select again (frame %llu)\n", (unsigned long long)frame);
+                } else if (netFightStart.valid && !reload) {
                     std::uint16_t wins[3];
                     const std::uint32_t at[3] = {0x39DE58u, 0x3AECB8u, 0x39DE5Au};
                     for (int i = 0; i < 3; ++i) std::memcpy(&wins[i], recomp_memory(at[i], 2u), 2u);
@@ -1392,7 +1523,7 @@ static void netWork(std::uint64_t frame, bool live, bool over)
     /* Three rounds won take the match, whatever the save's options say (VS Battle's own two): each fighter's record keeps
        the rounds to win at +0x1550, which the round's end compares its rounds won (+0x154C) with (0x38B30). Written at a
        frame's start from the game's own state, so alike on both sides and in frames run again. */
-    if (*recomp_memory_u32(0x398700u) == kFightScene)
+    if (*recomp_memory_u32(0x398700u) == kFightScene && !netTeam) // (team battle: its own rounds)
         for (std::uint32_t p = 0; p < 2u; ++p) {
             std::uint32_t *rounds = recomp_memory_u32(SC2_FIGHTER_RECORD + p * SC2_FIGHTER_STRIDE + SC2_FIGHTER_FIELD(0x1550u));
             if (*rounds == 0u || *rounds == kNetRounds) continue;
@@ -1722,13 +1853,54 @@ static void ggSync()
     netPlayers[1] = ggUnpack(pads + kGgPad);
 }
 
+// (team battle too: its wins are counted once a whole team is beaten, not at a member's KO (measured, teamTrace))
 static bool ggOverNow() { return !netAuto && winsCounted() != netStartWins; }
+
+/* Team battle: a member beaten counts a round won of the other's record (+0x154C; to win +0x1550 = the team's size), and
+   the next member comes in later in the same fight scene, its character and outfit written to the record (+0x58,
+   +0x64) and its data read from the disc then (measured 2026-11-25: KO frame 3361, next member 3930, ~5 MB read right
+   after). Read in a rollback, run again, those loads parted the two games; so from the KO the frames run in lockstep
+   until the next member has stood kFightSettled frames, as the fight's own start (netFightSince). From the game's state
+   only, alike on both sides. */
+static bool teamGap;
+static void teamMembers(bool fight, std::uint64_t frame)
+{
+    static bool known;
+    static std::uint32_t rounds[2], member[2];
+    if (!netTeam || !fight) {
+        known = teamGap = false;
+        return;
+    }
+    std::uint32_t r[2], m[2];
+    for (std::uint32_t p = 0; p < 2u; ++p) {
+        const std::uint32_t record = SC2_FIGHTER_RECORD + p * SC2_FIGHTER_STRIDE;
+        // (the low 16 bits: the rounds won, one more at each KO; the high 16 bits change too, ~20 frames after the next
+        // member is in, which is no KO)
+        r[p] = *recomp_memory_u32(record + SC2_FIGHTER_FIELD(0x154Cu)) & 0xffffu;
+        m[p] = (*reinterpret_cast<const std::uint16_t *>(recomp_memory(record + SC2_FIGHTER_FIELD(0x58u), 2u))) |
+               std::uint32_t(*reinterpret_cast<const std::uint16_t *>(recomp_memory(record + SC2_FIGHTER_FIELD(0x64u), 2u))) << 16;
+    }
+    if (known && (r[0] != rounds[0] || r[1] != rounds[1]) && !teamGap) {
+        teamGap = true;
+        std::fprintf(stderr, "online: team battle: a member beaten (frame %llu): lockstep until the next one stands%c", (unsigned long long)frame, 10);
+    }
+    if (known && teamGap && (m[0] != member[0] || m[1] != member[1])) {
+        teamGap = false;
+        netFightSince = frame;
+        std::fprintf(stderr, "online: team battle: the next member in (frame %llu)%c", (unsigned long long)frame, 10);
+    }
+    known = true;
+    for (int p = 0; p < 2; ++p) {
+        rounds[p] = r[p];
+        member[p] = m[p];
+    }
+}
 
 // The mode the frame at this boundary runs in: rollback in the loaded fight only (the state decides, alike on both sides)
 static int ggWant()
 {
     const bool fight = *recomp_memory_u32(0x398700u) == kFightScene && *recomp_memory_u32(0x398704u) == 0xFFFFFFFFu;
-    return fight && !netAuto && !ggOverNow() && netFightSince != UINT64_MAX && ggFrame >= netFightSince + kFightSettled ? -1 : 1;
+    return fight && !netAuto && !ggOverNow() && !teamGap && netFightSince != UINT64_MAX && ggFrame >= netFightSince + kFightSettled ? -1 : 1;
 }
 
 // A frame's work before the game runs it, live or again
@@ -1777,6 +1949,7 @@ static void ggPrepare(bool live)
     const bool fight = *recomp_memory_u32(0x398700u) == kFightScene && *recomp_memory_u32(0x398704u) == 0xFFFFFFFFu;
     if (!fight) netFightSince = UINT64_MAX;
     else if (netFightSince == UINT64_MAX || netFightSince > frame) netFightSince = frame;
+    if (live || !fight) teamMembers(fight, frame); // (live frames only: what a frame run again shows was seen live first or is seen at the next)
     if (fight && !netFightStart.valid && live && !netAuto && frame == netFightSince + kFightSettled) {
         sc2::SaveFrame(netFightStart);
         std::fprintf(stderr, "online: the fight's start kept for a rematch (frame %llu)\n", (unsigned long long)frame);
@@ -1786,6 +1959,8 @@ static void ggPrepare(bool live)
     const bool over = ggOverNow();
     if (over && (netOverAt == 0 || frame < netOverAt)) netOverAt = frame;
     if (!over && netOverAt != 0 && frame <= netOverAt) netOverAt = 0;
+    if (live) teamHandOver(frame);
+    if (live) teamTrace(frame);
     if (live) netAutoEnds(frame);
     if (netAuto) {
         // (both players' controls from the script; computed once a frame, in lockstep)
@@ -1921,6 +2096,22 @@ static void ggDelay(int delay)
     if (delay == ggCurDelay) return;
     ggCurDelay = delay;
     ggpo_set_frame_delay(gg, ggLocal, delay);
+}
+
+/* The lockstep's input delay (outside the fight, and team battle's member change): the other side's controls must be there
+   within it, or each frame waits. 4 frames (67 ms) held up to a ping of ~100 ms; many players have about that (user
+   2026-11-25: "spoustu lidi bude mit kolem 100ms"), so it follows the ping, taken as the lockstep begins and kept for it:
+   half the ping and 25 ms to spare, in frames, 4 to 10 (ping 100 -> 5, 150 -> 6, 250 -> 9). Each side its own; GGPO
+   delivers both sides' controls alike whatever the delays. */
+static int ggLockDelay = 4;
+static int ggLockDelayFor()
+{
+    GGPONetworkStats stats{};
+    int ping = 0;
+    if (gg && GGPO_SUCCEEDED(ggpo_get_network_stats(gg, ggRemote, &stats)) && stats.network.ping > 0 && stats.network.ping < 2000)
+        ping = stats.network.ping;
+    const int frames = static_cast<int>(std::ceil((ping / 2.0 + 25.0) / (1000.0 / 60.0)));
+    return std::max(netplay->Delay(), std::clamp(frames, 4, 10));
 }
 
 static void ggBoundary();
@@ -2161,7 +2352,8 @@ static void ggBoundary()
     if (ggPending) {
         ggPending = false;
         ++ggFrame;
-        ggSaveWanted = ggWant() == -1 || ggGraceUntil > ggFrame;
+        // (also the first frame after the rollback's end (ggMode still -1): GGPO may go back to it before the mode below turns)
+        ggSaveWanted = ggWant() == -1 || ggMode == -1 || ggGraceUntil > ggFrame;
         ggpo_advance_frame(gg);
     }
     /* (the hidden way from the parking to the fight: both players' controls are the script's, alike on both sides,
@@ -2176,13 +2368,18 @@ static void ggBoundary()
         ggMode = want;
         ggGraceUntil = ended ? ggFrame + 8u : 0u;
         ggpo_set_max_prediction(want == 1 && ggGraceUntil == 0u ? 1 : -1);
-        ggDelay(want == 1 ? std::max(netplay->Delay(), 4) : netplay->Delay());
-        std::fprintf(stderr, "online: frame %llu: %s\n", (unsigned long long)ggFrame, want == 1 ? "lockstep, delay 4" : "rollback");
+        if (want == 1) ggLockDelay = ggLockDelayFor();
+        ggDelay(want == 1 ? ggLockDelay : netplay->Delay());
+        std::fprintf(stderr, "online: frame %llu: %s, delay %d\n", (unsigned long long)ggFrame, want == 1 ? "lockstep" : "rollback",
+                     want == 1 ? ggLockDelay : netplay->Delay());
     } else if (ggMode == 1 && ggGraceUntil && ggFrame >= ggGraceUntil) {
         ggGraceUntil = 0u;
         ggpo_set_max_prediction(1);
     }
-    ggDelay(fastAuto ? 30 : ggMode == 1 ? std::max(netplay->Delay(), 4) : netplay->Delay());
+    // (a lockstep from the session's start (the select) began before any ping was known: raised once a second when the ping
+    // asks for more, never lowered inside one)
+    if (ggMode == 1 && !fastAuto && ggFrame % 60u == 0u) ggLockDelay = std::max(ggLockDelay, ggLockDelayFor());
+    ggDelay(fastAuto ? 30 : ggMode == 1 ? ggLockDelay : netplay->Delay());
     ggpo_idle(gg, 0);
     if (ggMissing) {
         netplay->ended = "The match could not go back to a frame (rollback).";
@@ -2591,7 +2788,7 @@ static void preludeFrame()
     }
     autoPads();
     ++preludeFrames;
-    if (launcherMode() && !snapMenu.valid && autoScene == 6u && autoFrames == 131u) {
+    if ((launcherMode() || netTeam) && !snapMenu.valid && autoScene == 6u && autoFrames == 131u) {
         recomp_kernel_drain_others();
         snapMenuFrames = autoFrames;
         sc2::SaveFrame(snapMenu);
@@ -2755,6 +2952,8 @@ static void netSessionReset()
     g_ggpo_local_hash_frame = g_ggpo_local_hash = g_ggpo_remote_hash_frame = g_ggpo_remote_hash = 0u;
     ggHashes.clear();
     netLive = netConnected = netRoute = false;
+    teamMenuSeen = teamHanded = false;
+    teamSelectStart = sc2::SaveState{};
     netReads = 0u;
     netPlayers[0] = netPlayers[1] = RecompInputGamepad{};
     sc2_net_live = 0;
@@ -2891,6 +3090,20 @@ static bool preludeMeet()
     sc2_net_seeded = 1;
     const double met = perfNow();
     recomp_kernel_drain_others();
+    if (netTeam) {
+        // (team battle: on from the mode select, teamWalk)
+        if (!snapMenu.valid) {
+            netplay->ended = "team battle: the game has no mode select kept";
+            netplay->failed = true;
+            return false;
+        }
+        sc2::LoadFrame(snapMenu);
+        recomp_kernel_drain_others();
+        sc2::TrainingUnlockAll(true); // (as the prelude has it at the mode select)
+        autoScene = *recomp_memory_u32(0x398700u);
+        autoFrames = snapMenuFrames;
+        std::fprintf(stderr, "online: team battle: the mode select put back (scene %u)\n", autoScene);
+    }
     std::vector<std::uint8_t> blob;
     const std::vector<std::uint32_t> mine = sc2::PageHashes();
     if (!netplay->Hosting()) blob.assign(reinterpret_cast<const std::uint8_t *>(mine.data()),
@@ -3385,6 +3598,8 @@ int main(int argc, char **argv)
         if (argument == "--started-over") { startedOver = true; continue; }
         if (argument == "--net-fresh") { netFresh = true; continue; }
         if (argument == "--net-prelude") { netPrelude = true; continue; }
+        if (argument == "--net-team") { netTeam = true; continue; }
+        if (argument == "--net-team-size" && i + 1 < argc) { netTeamSize = std::clamp(std::atoi(argv[++i]), 1, 8); continue; }
         if (argument == "--practice" && i + 1 < argc) {
             const std::string spec = argv[++i];
             if (std::sscanf(spec.c_str(), "%d:%d:%d:%d:%d", &practicePick[0], &practiceOutfit[0], &practicePick[1],
