@@ -992,6 +992,11 @@ static void teamTrace(std::uint64_t frame)
         rounds[p] = r;
         chars[p] = c;
     }
+    static int begun = -1; // (the fighting has begun: the float upstream's training reads, as the practice)
+    const int fighting = *recomp_memory_u32(0x39D2ACu) != 0u;
+    if (fighting != begun && now == 7u)
+        std::fprintf(stderr, "team trace: frame %llu fighting %d%c", (unsigned long long)frame, fighting, 10);
+    begun = fighting;
     if (!changed) return;
     scene = now;
     wins = counted;
@@ -1398,6 +1403,7 @@ static void netFrame()
     if (perfLastResim) perfInside += perfLeftAt - enter;
 }
 
+static bool teamInAtNow(std::uint64_t frame);
 static RecompInputGamepad netMine(std::uint64_t frame, bool over)
 {
     (void)frame;
@@ -1419,7 +1425,8 @@ static RecompInputGamepad netMine(std::uint64_t frame, bool over)
         if (teamHanded && at == 10u) {
             // (team battle: the cursor goes back to its first fighter after each pick, and a fighter is taken at most twice:
             // in the Nth window of 160 frames N steps to the right, then A, so every pick is another fighter)
-            const std::uint64_t n = t / 160u, in = t % 160u;
+            static const bool same = std::getenv("SC2_TEST_TEAM_SAME") != nullptr; // (the same fighter twice in a row)
+            const std::uint64_t n = t / 160u / (same ? 2u : 1u), in = t % 160u;
             if (in < 8u * n && in % 8u < 3u) mine.buttons |= 0x8u;
             if (in >= 150u && in < 154u) mine.analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xff;
         }
@@ -1440,6 +1447,9 @@ static RecompInputGamepad netMine(std::uint64_t frame, bool over)
         for (int b = 0; b < 4; ++b)
             if (held & (0x10u << b)) mine.analog_buttons[kButtons[b]] = 0xff;
     }
+    // (tests: SC2_TEST_SKIP=1 skips a next member's intro with Start, as a player may)
+    static const bool skipIntro = std::getenv("SC2_TEST_SKIP") != nullptr;
+    if (skipIntro && teamInAtNow(frame)) mine.buttons |= RECOMP_INPUT_BUTTON_START;
     if (netTyping || netLeaving) mine = RecompInputGamepad{}; // (the keys are the chat's, or the question's)
     if (netAuto) {
         autoPads();
@@ -1863,37 +1873,35 @@ static bool ggOverNow() { return !netAuto && winsCounted() != netStartWins; }
    until the next member has stood kFightSettled frames, as the fight's own start (netFightSince). From the game's state
    only, alike on both sides. */
 static bool teamGap;
+static std::uint64_t teamInAt; // (tests: the frame the last member came in)
+/* (frames of lockstep after the next member's data is read, in place of the fight's own kFightSettled: all of it is read
+   before that (measured), its intro follows and can be skipped with Start, so 300 reached into the fighting: FIGHT!! at
+   ~250 without a skip. The intro and the fight run in rollback.) */
+constexpr std::uint64_t kTeamSettled = 60u;
+static bool teamInAtNow(std::uint64_t frame) { return teamInAt != 0u && frame >= teamInAt + 130u && frame < teamInAt + 136u; }
 static void teamMembers(bool fight, std::uint64_t frame)
 {
-    static bool known;
-    static std::uint32_t rounds[2], member[2];
-    if (!netTeam || !fight) {
-        known = teamGap = false;
-        return;
-    }
-    std::uint32_t r[2], m[2];
-    for (std::uint32_t p = 0; p < 2u; ++p) {
-        const std::uint32_t record = SC2_FIGHTER_RECORD + p * SC2_FIGHTER_STRIDE;
-        // (the low 16 bits: the rounds won, one more at each KO; the high 16 bits change too, ~20 frames after the next
-        // member is in, which is no KO)
-        r[p] = *recomp_memory_u32(record + SC2_FIGHTER_FIELD(0x154Cu)) & 0xffffu;
-        m[p] = (*reinterpret_cast<const std::uint16_t *>(recomp_memory(record + SC2_FIGHTER_FIELD(0x58u), 2u))) |
-               std::uint32_t(*reinterpret_cast<const std::uint16_t *>(recomp_memory(record + SC2_FIGHTER_FIELD(0x64u), 2u))) << 16;
-    }
-    if (known && (r[0] != rounds[0] || r[1] != rounds[1]) && !teamGap) {
-        teamGap = true;
+    /* (the field's low 16 bits count the members beaten at the KO, its high 16 bits the same once the next member is in and
+       its data read, ~21 frames after its character is written (measured, every change of five matches): the two differ from
+       the KO to there. From the state alone, so a KO only guessed leaves nothing behind, and the next member may be the
+       same fighter in the same outfit.) */
+    static std::uint64_t since;
+    bool gap = false;
+    if (netTeam && fight)
+        for (std::uint32_t p = 0; p < 2u; ++p) {
+            const std::uint32_t r = *recomp_memory_u32(SC2_FIGHTER_RECORD + p * SC2_FIGHTER_STRIDE + SC2_FIGHTER_FIELD(0x154Cu));
+            gap |= (r & 0xffffu) != r >> 16;
+        }
+    if (gap && !teamGap) {
+        since = frame;
         std::fprintf(stderr, "online: team battle: a member beaten (frame %llu): lockstep until the next one stands%c", (unsigned long long)frame, 10);
     }
-    if (known && teamGap && (m[0] != member[0] || m[1] != member[1])) {
-        teamGap = false;
-        netFightSince = frame;
+    if (!gap && teamGap && fight && frame >= since + 60u) { // (shorter: a KO that was only guessed)
+        netFightSince = frame + kTeamSettled - kFightSettled; // (the rollback starts kTeamSettled from here: ggWant)
+        teamInAt = frame;
         std::fprintf(stderr, "online: team battle: the next member in (frame %llu)%c", (unsigned long long)frame, 10);
     }
-    known = true;
-    for (int p = 0; p < 2; ++p) {
-        rounds[p] = r[p];
-        member[p] = m[p];
-    }
+    teamGap = gap;
 }
 
 // The mode the frame at this boundary runs in: rollback in the loaded fight only (the state decides, alike on both sides)
