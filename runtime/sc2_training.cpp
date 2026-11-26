@@ -41,6 +41,7 @@
      one, its recovery those after its last; the advantage, the frames
      between the attacker's being free again and the other's. */
 #include "sc2_training.h"
+#include "sc2_practice.h"
 #include "sc2_guest.h"
 #include "sc2_fighter.h"
 #include "sc2_panel.h"
@@ -213,6 +214,7 @@ struct Move {
     bool on = false;
     uint32_t start = 0, first_live = 0, last_live = 0, live = 0;
     bool contact = false, hit = false;
+    float damage = 0.0f;
 };
 struct Shown {
     bool valid = false;
@@ -220,6 +222,8 @@ struct Shown {
     bool contact = false, hit = false;
     bool advantage_known = false;
     int advantage = 0;
+    float damage = 0.0f;
+    uint32_t advantage_at = 0;
 };
 struct Advantage {
     bool waiting = false;
@@ -337,7 +341,29 @@ bool TrainingRestart()
         reacting_before[p] = false;
     }
     replay_at = 0;
+    if (sc2_practice_running()) PracticeLoaded();
     return true;
+}
+
+bool TrainingDummyRight() { return player1_left; }
+
+bool TrainingFightReady()
+{
+    return InFight() && LoadFloat(Record(0) + kHealthMax) == 240.0f && LoadFloat(Record(1) + kHealthMax) == 240.0f;
+}
+
+void TrainingPositionLoaded()
+{
+    for (int p = 0; p < 2; ++p) {
+        history[p].clear();
+        combo[p].hits = 0;
+        health_before[p] = LoadFloat(Record(p) + kHealth);
+        reacting_before[p] = false;
+        stun_before[p] = *reinterpret_cast<const int32_t *>(recomp_memory(Record(p) + kHitStun, 4u));
+        move[p] = Move{};
+        advantage[p] = Advantage{};
+        meter[p].clear();
+    }
 }
 
 void TrainingForget()
@@ -467,6 +493,7 @@ void TrainingFrame()
                 out.recovery = frame_number - 1u - m.last_live;
                 out.contact = m.contact;
                 out.hit = m.hit;
+                out.damage = m.damage;
             }
         }
     }
@@ -475,6 +502,7 @@ void TrainingFrame()
         if (move[p].on && contact[1 - p]) {
             move[p].contact = true;
             move[p].hit = move[p].hit || hit[1 - p];
+            if (hit[1 - p]) move[p].damage += combo[p].last;
             advantage[p] = Advantage{true, 0u, 0u};
         }
         Advantage &a = advantage[p];
@@ -484,6 +512,7 @@ void TrainingFrame()
         if (a.attacker_free && a.defender_free) {
             a.waiting = false;
             shown[p].advantage_known = true;
+            shown[p].advantage_at = frame_number;
             shown[p].advantage = static_cast<int>(a.defender_free) - static_cast<int>(a.attacker_free);
         }
     }
@@ -519,7 +548,8 @@ void TrainingFrame()
     Sides();
     for (int p = 0; p < 2; ++p) {
         const bool mirrored = (p == 0) != player1_left;
-        Held now{Direction(seen[p], mirrored), Buttons(seen[p]), 1};
+        const RecompInputGamepad &pad = p == 0 && sc2_practice_running() ? PracticeOwnPad() : seen[p];
+        Held now{Direction(pad, mirrored), Buttons(pad), 1};
         std::vector<Held> &rows = history[p];
         if (!rows.empty() && rows.front().direction == now.direction && rows.front().buttons == now.buttons)
             ++rows.front().frames;
@@ -531,6 +561,10 @@ void TrainingFrame()
         if (training.dummy == Dummy::Record) recording.clear();
         replay_at = 0;
         dummy_before = training.dummy;
+    }
+    if (sc2_practice_running()) {
+        PracticeFrame();
+        return;
     }
     /* (Practice's dummy is its own: played by controller 2 while recording or replaying, then its own again) */
     uint32_t *control = recomp_memory_u32(Record(1) + kControl);
@@ -625,6 +659,11 @@ bool TrainingUnlockAll(bool quiet)
 bool TrainingPad(uint32_t port, RecompInputGamepad *pad, bool sampled)
 {
     if (port > 1u) return sampled;
+    if (sc2_practice_running() && InPractice()) {
+        sampled = PracticePad(port, pad, sampled);
+        seen[port] = sampled ? *pad : RecompInputGamepad{};
+        return sampled;
+    }
     const Training &training = TrainingState();
     if (training.dummy != Dummy::Off && InFight()) {
         if (training.dummy == Dummy::Record) {
@@ -742,7 +781,40 @@ void ApplyTraining(uint32_t)
         std::snprintf(panel.note, sizeof panel.note, "%s", note);
     }
     /* (once the fighters' records are filled in: while the fight loads they are not) */
-    if (InPractice() && LoadFloat(Record(0) + kHealthMax) == 240.0f && LoadFloat(Record(1) + kHealthMax) == 240.0f) {
+    const bool practice_fight = InPractice() && TrainingFightReady();
+    if (practice_fight && sc2_practice_running()) {
+        /* (the practice, as Tekken 6 Online's: its menu, or with it closed the input display and the frame data boxes) */
+        PracticePanel(panel);
+        if (panel.menu_rows == 0u && !PracticeGameMenu()) {
+            if (training.input_display)
+                for (const Held &held : history[0]) {
+                    Sc2PanelInput &row = panel.own[panel.own_rows++];
+                    const int column = (held.direction - 1) % 3, line = (held.direction - 1) / 3;
+                    row.frames = std::min<uint32_t>(held.frames, 999u);
+                    row.dirs = static_cast<unsigned char>((line == 2 ? 1 : line == 0 ? 2 : 0) | (column == 0 ? 4 : column == 2 ? 8 : 0));
+                    row.buttons = held.buttons & 15u;
+                }
+            for (int p = 0; p < 2; ++p) {
+                if (!training.frame_data_side[p]) continue;
+                const Shown &mine = shown[p], &theirs = shown[1 - p];
+                Sc2PanelFrameData &box = panel.data[p];
+                box.shown = true;
+                box.attack = mine.valid;
+                box.startup = mine.startup;
+                box.active = mine.active;
+                box.recovery = mine.recovery;
+                box.damage = static_cast<int>(mine.damage + 0.5f);
+                /* (the last exchange: this side's attack, or the other side's, when that one is newer, from this side) */
+                const bool other = theirs.valid && theirs.advantage_known && theirs.advantage_at > mine.advantage_at;
+                const Shown &last = other ? theirs : mine;
+                box.exchange = last.valid;
+                box.known = last.advantage_known;
+                box.guard = last.contact && !last.hit;
+                box.advantage = other ? -last.advantage : last.advantage;
+                if (!other && mine.valid && !mine.contact) box.exchange = box.known = false;
+            }
+        }
+    } else if (practice_fight) {
         for (int p = 0; p < 2; ++p) {
             if (training.combo_readout) {
                 const Combo &c = combo[p];
@@ -778,13 +850,14 @@ void ApplyTraining(uint32_t)
         }
     }
     /* (the dummy, in any fight: Practice and VS Battle) */
-    if (InFight() && training.dummy == Dummy::Record) {
+    if (InFight() && !sc2_practice_running() && training.dummy == Dummy::Record) {
         std::snprintf(panel.readout[1][panel.readout_rows[1]++], SC2_PANEL_TEXT, "RECORDING %.1f s", recording.size() / 60.0);
-    } else if (InFight() && training.dummy == Dummy::Replay) {
+    } else if (InFight() && !sc2_practice_running() && training.dummy == Dummy::Replay) {
         std::snprintf(panel.readout[1][panel.readout_rows[1]++], SC2_PANEL_TEXT,
             recording.empty() ? "REPLAY: nothing recorded" : "REPLAY %.1f s", recording.size() / 60.0);
     }
-    if (training.frame_data && InPractice() && !meter[0].empty()) {
+    if ((sc2_practice_running() ? training.frame_meter && panel.menu_rows == 0u : training.frame_data) && InPractice() &&
+        !meter[0].empty()) {
         panel.meter_length = static_cast<unsigned>(meter[0].size());
         for (int p = 0; p < 2; ++p) std::memcpy(panel.meter[p], meter[p].data(), meter[p].size());
     }

@@ -8,6 +8,8 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -134,6 +136,145 @@ void Meter(const Sc2Panel &panel, float width, float height)
     }
 }
 
+/* --- the practice, drawn as Tekken 6 Online's (its tekken6_app.cpp and t6_practice_hud.cpp) --- */
+
+/* (its font scales are of a 13-pixel font at 720 lines) */
+float PracticeFont(float scale, float height) { return scale * (height / 720.0f) / panel_scale; }
+
+const ImVec4 kGrey(0.82f, 0.82f, 0.86f, 0.9f), kWhite(1.0f, 1.0f, 1.0f, 1.0f), kGold(1.0f, 0.85f, 0.3f, 1.0f);
+
+/* The menu, in the middle; its rows scroll with the cursor when they do not fit, the help under them stays */
+void PracticeMenu(const Sc2Panel &panel, float width, float height)
+{
+    if (panel.menu_rows == 0u) return;
+    ImGui::SetNextWindowPos(ImVec2(width * 0.5f, height * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("sc2-practice-menu", nullptr, kFlags)) {
+        ImGui::SetWindowFontScale(PracticeFont(1.9f, height));
+        ImGui::TextColored(kGold, "PRACTICE MENU");
+        ImGui::Spacing();
+        const int count = static_cast<int>(panel.menu_rows), cursor = panel.menu_cursor;
+        const float line = ImGui::GetTextLineHeightWithSpacing();
+        const int room = std::max(5, static_cast<int>(height * 0.94f / line) - 4 - static_cast<int>(panel.help_rows));
+        const int first = count > room ? std::clamp(cursor - room / 2, 0, count - room) : 0;
+        const int end = std::min(count, first + room);
+        for (int i = first; i < end; ++i) {
+            const char *mark = i == first && first > 0 ? "^" : i == end - 1 && end < count ? "v" : " ";
+            if (i == cursor) ImGui::TextColored(kGold, "> %s", panel.menu[i]);
+            else ImGui::TextColored(kGrey, "%s %s", mark, panel.menu[i]);
+        }
+        ImGui::TextUnformatted("");
+        for (unsigned i = 0u; i < panel.help_rows; ++i) ImGui::TextColored(kGrey, "  %s", panel.help[i]);
+        if (panel.note[0] != '\0') ImGui::TextColored(kWhite, "%s", panel.note);
+    }
+    ImGui::End();
+}
+
+/* What the practice does now (a recording), and its messages, top left */
+void PracticeStatus(const Sc2Panel &panel, float width, float height)
+{
+    if (panel.menu_rows != 0u || panel.status[0] == '\0') return;
+    ImGui::SetNextWindowPos(ImVec2(width * 0.02f, height * 0.17f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    if (ImGui::Begin("sc2-practice-status", nullptr, kFlags)) {
+        ImGui::SetWindowFontScale(PracticeFont(1.3f, height));
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", panel.status);
+    }
+    ImGui::End();
+}
+
+/* An arrow of the input display (forward = right), or a small dot for neutral */
+void Arrow(ImDrawList *draw, ImVec2 c, float r, unsigned dirs, ImU32 colour)
+{
+    float x = ((dirs & 8u) ? 1.0f : 0.0f) - ((dirs & 4u) ? 1.0f : 0.0f);
+    float y = ((dirs & 2u) ? 1.0f : 0.0f) - ((dirs & 1u) ? 1.0f : 0.0f);
+    if (x == 0.0f && y == 0.0f) {
+        draw->AddCircleFilled(c, r * 0.18f, IM_COL32(150, 150, 160, 200));
+        return;
+    }
+    const float n = std::sqrt(x * x + y * y);
+    x /= n;
+    y /= n;
+    const ImVec2 tip(c.x + x * r, c.y + y * r), tail(c.x - x * r * 0.8f, c.y - y * r * 0.8f);
+    const ImVec2 base(c.x + x * r * 0.15f, c.y + y * r * 0.15f);
+    draw->AddLine(tail, base, colour, r * 0.32f);
+    const float w = r * 0.55f;
+    draw->AddTriangleFilled(tip, ImVec2(base.x - y * w, base.y + x * w), ImVec2(base.x + y * w, base.y - x * w), colour);
+}
+
+/* The player's inputs: the newest at the top, the frames held, the arrow and the four buttons, filled in when pressed:
+   A left, B up, K right, G down, as on the pad (the Xbox's X, Y, B, A, in its colours) */
+void PracticeInputs(const Sc2Panel &panel, float width, float height)
+{
+    if (panel.own_rows == 0u) return;
+    ImGui::SetNextWindowPos(ImVec2(width * 0.02f, height * 0.36f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    if (ImGui::Begin("sc2-practice-inputs", nullptr, kFlags)) {
+        ImGui::SetWindowFontScale(PracticeFont(1.4f, height));
+        const float h = ImGui::GetFontSize() * 1.25f, r = h * 0.38f, number = ImGui::CalcTextSize("999").x;
+        static const ImU32 kButton[4] = {IM_COL32(70, 140, 255, 255), IM_COL32(255, 205, 60, 255), IM_COL32(240, 80, 80, 255),
+                                         IM_COL32(80, 210, 110, 255)};
+        static const ImVec2 kPlace[4] = {ImVec2(-1.0f, 0.0f), ImVec2(0.0f, -1.0f), ImVec2(1.0f, 0.0f), ImVec2(0.0f, 1.0f)};
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        for (unsigned k = 0u; k < panel.own_rows && k < SC2_PANEL_INPUT_ROWS; ++k) {
+            const Sc2PanelInput &row = panel.own[k];
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const ImU32 text = k == 0u ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 210, 220);
+            char frames[16];
+            std::snprintf(frames, sizeof frames, "%u", row.frames);
+            draw->AddText(ImVec2(p.x + number - ImGui::CalcTextSize(frames).x, p.y + (h - ImGui::GetFontSize()) * 0.5f), text, frames);
+            const float ax = p.x + number + h * 0.75f, cy = p.y + h * 0.5f;
+            Arrow(draw, ImVec2(ax, cy), r, row.dirs, text);
+            const float bx = ax + h * 1.15f, d = h * 0.31f, br = h * 0.17f;
+            for (int b = 0; b < 4; ++b) {
+                const ImVec2 c(bx + kPlace[b].x * d, cy + kPlace[b].y * d);
+                if (row.buttons & (1u << b)) draw->AddCircleFilled(c, br, kButton[b]);
+                else draw->AddCircle(c, br, IM_COL32(150, 150, 160, 150), 0, 1.0f);
+            }
+            ImGui::Dummy(ImVec2(number + h * 2.5f, h));
+        }
+    }
+    ImGui::End();
+}
+
+/* One side's frame data box: its last attack, and the advantage of the last exchange from this side's view */
+void PracticeFrameData(const Sc2PanelFrameData &data, int side, float width, float height)
+{
+    if (!data.shown) return;
+    const ImVec4 grey(0.75f, 0.75f, 0.8f, 1.0f), green(0.35f, 0.95f, 0.45f, 1.0f), red(1.0f, 0.4f, 0.35f, 1.0f);
+    ImGui::SetNextWindowPos(ImVec2(width * (side ? 0.955f : 0.14f), height * 0.55f), ImGuiCond_Always, ImVec2(side ? 1.0f : 0.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    if (ImGui::Begin(side ? "sc2-practice-data-2" : "sc2-practice-data-1", nullptr, kFlags)) {
+        ImGui::SetWindowFontScale(PracticeFont(1.1f, height));
+        ImGui::TextColored(grey, "%s", side ? "OPPONENT" : "YOU");
+        ImGui::SetWindowFontScale(PracticeFont(1.5f, height));
+        const float column = ImGui::GetFontSize() * 6.5f;
+        const auto row = [&](const char *label, unsigned value, const char *format) {
+            ImGui::TextColored(grey, "%s", label);
+            ImGui::SameLine(column);
+            ImGui::TextColored(kWhite, format, value);
+        };
+        if (data.attack) {
+            row("Startup", data.startup, "i%u");
+            row("Active", data.active, "%u");
+            row("Recovery", data.recovery, "%u");
+            if (data.damage > 0) row("Damage", static_cast<unsigned>(data.damage), "%u");
+        } else {
+            ImGui::TextColored(grey, "no attack yet");
+        }
+        if (data.exchange) {
+            ImGui::Spacing();
+            ImGui::TextColored(grey, "%s", data.guard ? "On guard" : "On hit");
+            ImGui::SameLine(column);
+            ImGui::SetWindowFontScale(PracticeFont(2.6f, height));
+            if (!data.known) ImGui::TextColored(grey, "...");
+            else ImGui::TextColored(data.advantage > 0 ? green : data.advantage < 0 ? red : kWhite, "%+d", data.advantage);
+            ImGui::SetWindowFontScale(PracticeFont(1.5f, height));
+        }
+    }
+    ImGui::End();
+}
+
 }  // namespace
 
 void recomp_overlay_imgui_style(float target_height)
@@ -194,13 +335,18 @@ void recomp_overlay_imgui_build(const RecompOverlayText &text, float width, floa
     Meter(panel, width, height);
     Side(panel, 0, width, height);
     Side(panel, 1, width, height);
+    PracticeStatus(panel, width, height);
+    PracticeInputs(panel, width, height);
+    PracticeFrameData(panel.data[0], 0, width, height);
+    PracticeFrameData(panel.data[1], 1, width, height);
+    PracticeMenu(panel, width, height);
     if (panel.fps[0] != '\0') {
         ImGui::SetNextWindowPos(ImVec2(width * 0.98f, height * 0.02f), 0, ImVec2(1.0f, 0.0f));
         ImGui::Begin("sc2-fps", nullptr, kFlags);
         ImGui::TextUnformatted(panel.fps);
         ImGui::End();
     }
-    if (panel.note[0] != '\0') {
+    if (panel.note[0] != '\0' && panel.menu_rows == 0u) {
         ImGui::SetNextWindowPos(ImVec2(width * 0.5f, height * (text.hint[0] != '\0' ? 0.86f : 0.95f)), 0, ImVec2(0.5f, 1.0f));
         ImGui::Begin("sc2-note", nullptr, kFlags);
         ImGui::TextUnformatted(panel.note);

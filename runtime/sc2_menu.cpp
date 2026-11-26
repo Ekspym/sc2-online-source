@@ -625,7 +625,6 @@ void OnPresent(uint32_t swap_counter)
     DumpRam(swap_counter);
     SkipOpening();
     ApplyTraining(swap_counter);
-    PlayKeys();
     /* (tests: SC2_TEST_KEYS=SWAP:WHAT,... does at those Swaps what a key or the menu would: save, load (slot 1),
        over (start over), record, replay, slow, fast (2x), turbo (8x), full (speed), pause, unlock, endless, skip: a press, hud: the HUD hidden or shown,
        start: Start held on controller 1 for six reads, hd: HD textures on or off) */
@@ -678,9 +677,8 @@ void OnPresent(uint32_t swap_counter)
         Run(true);
         return;
     }
-    const bool held = OpenHeld();
-    if (held && !held_before) Run(false);
-    held_before = OpenHeld();
+    /* (this fork has no such menu to open: the practice's own is in sc2_practice.cpp; user 2026-11-25) */
+    (void)held_before;
 }
 
 } // namespace

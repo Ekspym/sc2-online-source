@@ -38,6 +38,7 @@
 #include "sc2_settings.h"
 #include "sc2_menu.h"
 #include "sc2_training.h"
+#include "sc2_practice.h"
 #include "sc2_guest.h"
 #include "sc2_hooks.h"
 #include "sc2_netplay.h"
@@ -2766,6 +2767,7 @@ static void practiceEnd()
     aids = sc2::Training{};
     aids.fps_counter = fps;
     sc2::TrainingForget();
+    sc2::PracticeForget(false);
     sc2::StatesForget();
     sc2::MenuSpeedFull();
     recomp_scene_freeze_set(false);
@@ -2858,13 +2860,13 @@ static void preludeFrame()
         sc2::Training &aids = sc2::TrainingState();
         if (first) {
             practiceAids = aids;
-            practiceAids.health_refill = practiceAids.infinite_time = practiceAids.frame_data = true;
-            practiceAids.input_display = practiceAids.combo_readout = true;
+            practiceAids.health_refill = practiceAids.infinite_time = practiceAids.input_display = true;
+            practiceAids.frame_data_side[0] = practiceAids.frame_data_side[1] = true;
             first = false;
         }
         practiceAids.dummy = sc2::Dummy::Off;
         aids = practiceAids;
-        practiceHint = 60u * 15u;
+        // (as T6: no help on the screen; START is the menu)
         std::fprintf(stderr, "practice: at the fight (prelude frame %llu, %u of the scene, %.0f ms after the command): stage %u, the controls are the player's\n",
                      (unsigned long long)preludeFrames, autoFrames, practiceAskedAt != 0.0 ? perfNow() - practiceAskedAt : 0.0,
                      *recomp_memory_u32(0x398770u));
@@ -3310,6 +3312,47 @@ extern "C" int sc2_practice_poll(void)
     practicePoll();
     return practiceHold || practicePrompt == 1;
 }
+extern "C" int sc2_practice_running(void) { return practice && !netPrelude; }
+extern "C" int sc2_practice_asking(void) { return practicePrompt == 1; }
+extern "C" int sc2_practice_pick(int player, int *outfit)
+{
+    if (outfit) *outfit = practiceOutfit[player & 1];
+    return practicePick[player & 1];
+}
+extern "C" int sc2_practice_stage(void) { return static_cast<int>(*recomp_memory_u32(0x398770u)); } // (the fight's own)
+/* The menu's quick select: at the next frame's start the practice is left for its parking, as at its end, and begun again
+   from there with other fighters or another stage (the parking's snapshots: the launcher's game alone) */
+static int practiceNext[5];
+static void practiceAgainFrame()
+{
+    sc2_net_frame = nullptr;
+    recomp_kernel_drain_others();
+    recomp_audio_output_set_muted(1);
+    sc2::Training &aids = sc2::TrainingState();
+    practiceAids = aids;
+    const bool fps = aids.fps_counter;
+    aids = sc2::Training{};
+    aids.fps_counter = fps;
+    sc2::TrainingForget();
+    sc2::PracticeForget(true);
+    parkPutBack();
+    practice = practiceHold = practiceFromQ = false;
+    for (int p = 0; p < 2; ++p) {
+        practicePick[p] = practiceNext[2 * p];
+        practiceOutfit[p] = practiceNext[2 * p + 1];
+    }
+    practiceStage = practiceNext[4];
+    practiceAskedAt = perfNow();
+    practiceBegin();
+}
+extern "C" int sc2_practice_again(int char1, int outfit1, int char2, int outfit2, int stage)
+{
+    if (!launcherMode() || !snapPark.valid || !snapMenu.valid) return 0;
+    const int next[5] = {char1, outfit1, char2, outfit2, stage};
+    std::copy(next, next + 5, practiceNext);
+    sc2_net_frame = practiceAgainFrame;
+    return 1;
+}
 extern "C" int sc2_practice_closable(void) { return practice && !netPrelude && launcherMode(); }
 extern "C" void sc2_practice_close(void) { practiceHold = true; }
 
@@ -3382,6 +3425,47 @@ static void inputDiag()
     }
 }
 
+/* (tests: SC2_PRACTICE_SEQ=READ:WHAT[+WHAT...][:READS],... the practice's controller 1 by the reads since the controls are the
+   player's: up down left right start back lclick A B X Y black white lt rt, held 4 reads or READS; shot = the game's own
+   screenshot; dump = guest RAM into runs' seq_READ.bin; quit) */
+static bool practiceSequence(RecompInputGamepad *pad)
+{
+    static const char *const sequence = std::getenv("SC2_PRACTICE_SEQ");
+    if (!sequence) return false;
+    static std::uint64_t reads;
+    ++reads;
+    for (const char *at = sequence; at && *at; at = std::strchr(at, ',') ? std::strchr(at, ',') + 1 : nullptr) {
+        char *end;
+        const unsigned long from = std::strtoul(at, &end, 10);
+        if (*end != ':') break;
+        const std::string item(end + 1, std::strcspn(end + 1, ","));
+        const std::size_t colon = item.find(':');
+        const unsigned long held = colon == std::string::npos ? 4ul : std::strtoul(item.c_str() + colon + 1, nullptr, 10);
+        if (reads < from || reads >= from + held) continue;
+        std::istringstream words(item.substr(0, colon));
+        for (std::string word; std::getline(words, word, '+');) {
+            static const struct { const char *name; std::uint16_t button; int analog; } kKeys[] = {
+                {"up", 0x1, -1}, {"down", 0x2, -1}, {"left", 0x4, -1}, {"right", 0x8, -1}, {"start", 0x10, -1},
+                {"back", 0x20, -1}, {"lclick", 0x40, -1}, {"A", 0, 0}, {"B", 0, 1}, {"X", 0, 2}, {"Y", 0, 3},
+                {"black", 0, 4}, {"white", 0, 5}, {"lt", 0, 6}, {"rt", 0, 7}};
+            for (const auto &key : kKeys)
+                if (word == key.name) {
+                    pad->buttons |= key.button;
+                    if (key.analog >= 0) pad->analog_buttons[key.analog] = 0xff;
+                }
+            if (reads != from) continue;
+            if (word == "shot") recomp_screenshot_request();
+            if (word == "quit") std::_Exit(0);
+            if (word == "dump")
+                if (FILE *out = std::fopen(("seq_" + std::to_string(from) + ".bin").c_str(), "wb")) {
+                    std::fwrite(recomp_memory(0u, RECOMP_XBOX_RAM_SIZE), 1, RECOMP_XBOX_RAM_SIZE, out);
+                    std::fclose(out);
+                }
+        }
+    }
+    return true;
+}
+
 static bool sampleInput(std::uint32_t port, RecompInputGamepad *gamepad)
 {
     if (port == 0u && practice && !netPrelude) practiceRead();
@@ -3448,6 +3532,7 @@ static bool sampleInput(std::uint32_t port, RecompInputGamepad *gamepad)
         lagRead(gamepad);
         sampled = true;
     }
+    if (practice && !netPrelude && practiceSequence(gamepad)) sampled = true;
     if (practice && !netPrelude && sampled) practiceAnswerRead(gamepad);
     static bool startHeld;
     const bool start = sampled && (gamepad->buttons & RECOMP_INPUT_BUTTON_START) != 0u;

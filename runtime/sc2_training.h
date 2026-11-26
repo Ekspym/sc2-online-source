@@ -23,6 +23,9 @@ struct Training {
     bool combo_readout = false;
     bool hit_boxes = false;
     bool frame_data = false;
+    /* (the practice's: the frame data boxes, the player's and the opponent's, and the meter) */
+    bool frame_data_side[2] = {false, false};
+    bool frame_meter = false;
     /* The endless battle: in any fight, the game plays both fighters, with no knockouts, no clock and no bars;
        a fighter whose controller is touched is the player's for a few seconds */
     bool endless = false;
@@ -65,6 +68,13 @@ bool TrainingRestart();
 /* The cheat that unlocks everything the game unlocks (characters, stages, modes, weapons, the Museum's pages): every
    item had, as the game's save keeps them. False online. */
 bool TrainingUnlockAll(bool quiet = false);  // quiet: no note on the screen (the online prelude)
+
+/* (the practice, sc2_practice.cpp) whether the dummy (player 2) stands on the right of the picture; whether the fight's
+   records are filled in, so that a position can be kept */
+bool TrainingDummyRight();
+bool TrainingFightReady();
+/* (a position put back: no hit is counted from what it changed) */
+void TrainingPositionLoaded();
 
 /* In an online match, the win streak (VS Battle's wins one after another by one player) and whose it is (-1: none) */
 unsigned OnlineStreak(int &player);

@@ -18,6 +18,10 @@ enum {
     SC2_PANEL_TEXT = 48,
     SC2_PANEL_SHAPES = 64,
     SC2_PANEL_METER = 80,
+    /* The practice's menu (sc2_practice.cpp) */
+    SC2_PANEL_MENU = 24,
+    SC2_PANEL_HELP = 4,
+    SC2_PANEL_MENU_TEXT = 96,
 };
 
 /* A frame meter's cell: what a fighter did that frame */
@@ -31,7 +35,30 @@ typedef struct Sc2PanelShape {
     unsigned kind;
 } Sc2PanelShape;
 
+/* A row of the practice's input display, as Tekken 6 Online's: the frames it was held, the direction (1 up, 2 down, 4 left,
+   8 right, as forward is right) and the buttons (1 A, 2 B, 4 K, 8 G) */
+typedef struct Sc2PanelInput {
+    unsigned frames;
+    unsigned char dirs, buttons;
+} Sc2PanelInput;
+
+/* A side's frame data box (its last attack, and the advantage of the last exchange from its view) */
+typedef struct Sc2PanelFrameData {
+    bool shown, attack, exchange, guard, known;
+    unsigned startup, active, recovery;
+    int damage, advantage;
+} Sc2PanelFrameData;
+
 typedef struct Sc2Panel {
+    /* The practice: its menu (menu_rows 0: closed), what it does now, the input display and the frame data boxes */
+    unsigned menu_rows, help_rows;
+    int menu_cursor;
+    char menu[SC2_PANEL_MENU][SC2_PANEL_MENU_TEXT];
+    char help[SC2_PANEL_HELP][SC2_PANEL_MENU_TEXT];
+    char status[64];
+    unsigned own_rows;
+    Sc2PanelInput own[SC2_PANEL_INPUT_ROWS];
+    Sc2PanelFrameData data[2];
     /* Each player's (player 1 left, player 2 right): the input display, newest first, and the readout */
     unsigned input_rows[2];
     char input[2][SC2_PANEL_INPUT_ROWS][SC2_PANEL_TEXT];

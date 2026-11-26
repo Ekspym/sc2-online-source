@@ -117,6 +117,9 @@ void sc2_panel_take(Sc2Panel *destination)
 
 bool sc2_panel_empty(const Sc2Panel *source)
 {
+    if (source->menu_rows != 0u || source->status[0] != '\0' || source->own_rows != 0u || source->data[0].shown ||
+        source->data[1].shown)
+        return false;
     return source->input_rows[0] == 0u && source->input_rows[1] == 0u && source->readout_rows[0] == 0u &&
         source->readout_rows[1] == 0u && source->note[0] == '\0' && source->fps[0] == '\0' && source->shape_count == 0u && source->meter_length == 0u;
 }

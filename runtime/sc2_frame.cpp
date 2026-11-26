@@ -10,6 +10,7 @@
 #include "sc2_state.h"
 #include "sc2_menu.h"
 #include "sc2_training.h"
+#include "sc2_practice.h"
 
 #include <cstdio>
 
@@ -120,6 +121,11 @@ extern "C" void sc2_frame_begins(void)
         if (DoAsked() && !asked_save) held.valid = false;
     }
     if (sc2::TrainingRestart()) held.valid = false;
+    if (sc2::PracticeSlots()) {
+        // (a practice's position put back: the dummy's option and the settings are the practice's still)
+        sc2::PracticeLoaded();
+        held.valid = false;
+    }
     if (action == SC2_FREEZE_NONE) {
         held.valid = false;
         /* (faster than full speed: some frames played without being shown or paced, as rollback's are) */
