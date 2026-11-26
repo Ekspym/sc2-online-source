@@ -48,6 +48,9 @@ ghidra_projects/
 *.gzf
 third_party/**
 !third_party/README.md
+# (the runtime with SC2 Online's changes: its source is part of the game program, GPL-3.0)
+!third_party/doa2u-re/
+!third_party/doa2u-re/**
 
 # Build and runtime output
 out/

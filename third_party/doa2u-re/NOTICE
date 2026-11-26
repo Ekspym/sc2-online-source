@@ -1,0 +1,92 @@
+Dead or Alive 2 Ultimate Native PC Port
+
+This repository contains project-authored source for interoperability and
+porting work. It does not distribute the game, generated game code, assets,
+console firmware, or other proprietary data.
+
+The initial shared runtime modules, their synthetic tests, extraction tools,
+and public export checker were copied from NoRain211/doa3-re at commit
+69cb910a13a737534fe2272cffd6211b1edf8d8e, under GPL-3.0-or-later. That runtime
+originated in the sister project NoRain211/doaxbv-re. Existing source notices
+are preserved. See docs/reuse.md for the scope of the reuse.
+
+The xboxrecomp submodule retains its own license and notices. The GPL license
+grants no rights to the game or third-party material.
+
+The Windows presenter builds SMAA by Jorge Jimenez and coauthors from
+iryoku/smaa, revision 71c806a838bdd7d517df19192a20f0c61b3ca29d, under its MIT
+license. Its original notices and LICENSE.txt remain in the fetched source.
+
+The macOS and Linux host layer (win32_compat, the POSIX fiber switch, the
+SDL3 audio output, the launchers and the SDL_GPU presenter's resource
+handling) adapts committed source from NoRain211/doa3-re (commit 48d05e9) and
+NoRain211/doaxbv-re, under GPL-3.0-or-later.
+
+The free camera's overlay draws with Dear ImGui by Omar Cornut, release
+1.91.9 (ocornut/imgui), fetched at configuration under its MIT license, whose
+notices remain in the fetched source.
+
+recomp-runtime/audio_reverb.cpp is altered from FAudio's
+src/FAudioFX_reverb.c (FNA-XNA/FAudio 26.10), Copyright (c) 2011-2024 Ethan
+Lee, Luigi Auriemma, and the MonoGame Team, under the zlib license, whose
+full text the file keeps.
+
+tools/build_prerequisites.py and its test are adapted from NoRain211/doaxbv-re
+at commit 5761e89, under GPL-3.0-or-later. The build downloads, but does not
+redistribute, the llvm-mingw compiler by Martin Storsjö and contributors.
+
+The XAudio 2.9 I3DL2 reverb conversion in recomp-runtime/xaudio2_reverb.h is
+altered from FAudio (FNA-XNA/FAudio, ReverbConvertI3DL2ToNative9 in
+src/FAudioFX_reverb.c at 6839b88e304a046ae1a609ff14a085371e02a4e0), under
+the zlib license:
+
+Copyright (c) 2011-2024 Ethan Lee, Luigi Auriemma, and the MonoGame Team
+
+This software is provided 'as-is', without any express or implied warranty.
+In no event will the authors be held liable for any damages arising from
+the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+claim that you wrote the original software. If you use this software in a
+product, an acknowledgment in the product documentation would be
+appreciated but is not required.
+
+2. Altered source versions must be plainly marked as such, and must not be
+misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source distribution.
+
+Dead or Alive, Xbox, and related names and marks belong to their respective
+owners. This project is not affiliated with or endorsed by those owners.
+
+The RC4 test vectors in recomp-runtime/kernel_crypto_test.c come from RFC
+6229, section 2 (https://www.rfc-editor.org/rfc/rfc6229). Section 4 permits
+their use as Code Components under the Simplified BSD License:
+
+Copyright (c) 2011 IETF Trust and the persons identified as the document
+authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
